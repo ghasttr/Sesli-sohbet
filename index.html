@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Sesli Sohbet Odası</title>
+</head>
+<body>
+  <h2>Oda: <span id="room-id"></span></h2>
+  <p>Bağlandınız! Mikrofon açık.</p>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    (async () => {
+      const roomId = prompt("Oda ismi girin:");
+      document.getElementById("room-id").textContent = roomId;
+
+      const socket = io();
+      const peers = {};
+      const myStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      socket.emit("join-room", roomId);
+
+      socket.on("user-connected", userId => {
+        const peer = new RTCPeerConnection();
+        myStream.getTracks().forEach(track => peer.addTrack(track, myStream));
+
+        peer.onicecandidate = e => {
+          if (e.candidate) socket.emit("ice-candidate", { to: userId, candidate: e.candidate });
+        };
+        peer.ontrack = e => {
+          const audio = document.createElement("audio");
+          audio.srcObject = e.streams[0];
+          audio.autoplay = true;
+          document.body.appendChild(audio);
+        };
+
+        peer.createOffer()
+          .then(offer => {
+            peer.setLocalDescription(offer);
+            socket.emit("offer", { to: userId, offer });
+          });
+
+        peers[userId] = peer;
+      });
+
+      socket.on("offer", async ({ from, offer }) => {
+        const peer = new RTCPeerConnection();
+        peers[from] = peer;
+        myStream.getTracks().forEach(track => peer.addTrack(track, myStream));
+
+        peer.onicecandidate = e => {
+          if (e.candidate) socket.emit("ice-candidate", { to: from, candidate: e.candidate });
+        };
+        peer.ontrack = e => {
+          const audio = document.createElement("audio");
+          audio.srcObject = e.streams[0];
+          audio.autoplay = true;
+          document.body.appendChild(audio);
+        };
+
+        await peer.setRemoteDescription(offer);
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        socket.emit("answer", { to: from, answer });
+      });
+
+      socket.on("answer", ({ from, answer }) => {
+        peers[from].setRemoteDescription(answer);
+      });
+      socket.on("ice-candidate", ({ from, candidate }) => {
+        peers[from].addIceCandidate(candidate);
+      });
+      socket.on("user-disconnected", userId => {
+        if (peers[userId]) peers[userId].close();
+      });
+    })();
+  </script>
+</body>
+</html>
